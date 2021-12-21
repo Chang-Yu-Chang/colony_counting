@@ -1,0 +1,185 @@
+---
+title: "PFU counting"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Installation 
+
+Install packages if not installed yet
+
+```{r eval = F}
+# Install package. Enter "a" in console when prompted
+if (!require("BiocManager", character.only = TRUE)) install.packages("BiocManager")
+if (!require("EBImage", character.only = TRUE)) BiocManager::install("EBImage")
+if (!require("tidyverse", character.only = TRUE)) install.packages("tidyverse")
+if (!require("broom", character.only = TRUE)) install.packages("broom")
+```
+
+Load packages
+
+```{r}
+library(tidyverse)
+library(broom)
+library(EBImage)
+```
+
+# Note
+
+- Be careful that this Rmd and the accompanied Rscript only work for the cropped image (see below) that only show ONE community at ONE dilution factor.
+
+- This code only works for counting the total number of colony. I am not able to distinguish the different colony morphology yet. But I think for those with >100 colony this should help speed up a bit.
+
+# Image processing
+
+Read a test image. I have cropped the image such that each input image is a community at a dilution factor.
+
+```{r}
+# Read an image
+img <- readImage(here::here("data/raw/test2.jpeg"))
+display(img, method = "raster", all = T)
+```
+
+Reduce the dimension of the image from 3 to 1. Using the most contrast dimension
+
+```{r}
+# Grey scale
+colorMode(img) = Grayscale
+display(img, method = "raster", all = T)
+```
+
+
+```{r}
+img <- img[,,3]
+display(img, method = "raster")
+```
+
+Blur the image as the pre-treatment for gating out the background noise
+
+```{r}
+# Blur
+img_bl <- gblur(img, sigma = 1)
+display(img_bl, method = "raster")
+```
+
+Set the global threshold
+
+```{r}
+# Global threshold
+threshold <- otsu(img_bl)
+img_th <- combine(mapply(function(frame, th) frame > th, getFrames(img), threshold, SIMPLIFY=FALSE))
+display(img_th, method = "raster")
+```
+
+Label the objects. Each object is a group of adjacent pixels.
+
+```{r}
+img_label = bwlabel(img_th)
+```
+
+Gating out the background. Be cautious that here I am setting a manual threshold (e.g., objects number of pixel <= 10 are considered noise). 
+
+```{r}
+# Remove background
+temp <- img_label %>% table()
+index_rm <- names(temp)[which(temp <= 10)] # Pixel size for gating out background
+img_clean <- rmObjects(img_label, index_rm)
+display(img_clean, method = "raster")
+```
+
+Watershed separates the adjacent colonies
+
+```{r}
+# Watershed
+img_ws <- watershed(distmap(img_clean), 1)
+display(colorLabels(img_ws), method = "raster")
+```
+
+You can get shape data for each colony: area, perimeter, radius, etc. The number of objects are the number of colonies.
+
+```{r}
+colony_shape <- computeFeatures.shape(img_ws) %>% as_tibble()
+```
+
+Number of total colonies
+
+```{r}
+nrow(colony_shape)
+```
+
+```{r}
+colony_shape
+```
+
+
+# Test on another image
+
+```{r}
+# Read an image
+img <- readImage(here::here("data/raw/test3.jpeg"))
+display(img, method = "raster", all = T)
+
+# Grey scale
+colorMode(img) = Grayscale
+display(img, method = "raster", all = T)
+img <- img[,,3]
+display(img, method = "raster")
+
+# Blur
+img_bl <- gblur(img, sigma = 1)
+display(img_bl, method = "raster")
+
+# Global threshold
+threshold <- otsu(img_bl)
+img_th <- combine(mapply(function(frame, th) frame > th, getFrames(img), threshold, SIMPLIFY=FALSE))
+display(img_th, method = "raster")
+img_label = bwlabel(img_th)
+display(img_label, method = "raster")
+
+# Remove background
+temp <- img_label %>% table()
+index_rm <- names(temp)[which(temp <= 10)] # Pixel size for gating out background
+img_clean <- rmObjects(img_label, index_rm)
+display(img_clean, method = "raster")
+
+# Watershed
+img_ws <- watershed(distmap(img_clean), 1)
+display(colorLabels(img_ws), method = "raster")
+```
+
+
+In this case, the difference in colony size is very large. It makes sense to tell them apart by the size
+
+```{r}
+colony_shape <- computeFeatures.shape(img_ws) %>% as_tibble()
+colony_shape
+```
+
+Relative count by clustering
+```{r}
+colony_shape %>%
+    as.matrix() %>%
+    kmeans(2) %>% 
+    broom::tidy() %>%
+    pull(size)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
